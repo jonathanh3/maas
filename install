@@ -3,32 +3,44 @@
 # Exit immediately if any command fails
 set -e
 
+# Function to echo and run a command
+run_cmd() {
+    echo -e "\n\033[1;34mCOMMAND [Running]:\033[0m $*"
+    "$@"
+}
+
 # Define the line to add in the pg_hba.conf file
 pg_line="host    $MAAS_DBNAME    $MAAS_DBUSER    0/0     md5"
 
 # Path to the pg_hba.conf file
-pg_hba_conf="/etc/postgresql/16/main/pg_hba.conf"
+pg_hba_conf="/etc/postgresql/14/main/pg_hba.conf"
 
-sudo snap install maas
+run_cmd sudo snap install maas
 
-sudo apt install -y postgresql
+run_cmd sudo apt install -y postgresql
+
+# Allow the postgres user to connect locally with trust (temporary change)
+sudo sed -i 's/^local\s\+all\s\+postgres\s\+\w\+/local all postgres trust/' "$pg_hba_conf"
+run_cmd sudo systemctl restart postgresql
 
 # Create a suitable PostgreSQL user
-sudo -i -u postgres psql -c "CREATE USER \"$MAAS_DBUSER\" WITH ENCRYPTED PASSWORD '$MAAS_DBPASS'"
+run_cmd sudo -i -u postgres psql -c "CREATE USER \"$MAAS_DBUSER\" WITH ENCRYPTED PASSWORD '$MAAS_DBPASS'"
+
+# Revert the pg_hba.conf change to its original state (optional for security)
+sudo sed -i 's/^local\s\+all\s\+postgres\s\+trust/local all postgres peer/' "$pg_hba_conf"
+run_cmd sudo systemctl restart postgresql
 
 # Create the MAAS database
-sudo -i -u postgres createdb -O "$MAAS_DBUSER" "$MAAS_DBNAME"
+run_cmd sudo -i -u postgres createdb -O "$MAAS_DBUSER" "$MAAS_DBNAME"
 
 # Check if the line already exists in the file
-if sudo grep -Fxq "$pg_line" "$pg_hba_conf"
-then
-    echo "The line already exists in $pg_hba_conf"
+if sudo grep -Fxq "$pg_line" "$pg_hba_conf"; then
+    echo -e "\033[1;33mINFO:\033[0m The line already exists in $pg_hba_conf"
 else
     # Add the line to the pg_hba.conf file
-    echo "$pg_line" | sudo tee -a "$pg_hba_conf" > /dev/null
+    echo "$pg_line" | run_cmd sudo tee -a "$pg_hba_conf" > /dev/null
 fi
 
-sudo maas init region+rack --database-uri "postgres://$MAAS_DBUSER:$MAAS_DBPASS@$HOSTNAME/$MAAS_DBNAME" --maas-url http://192.168.44.5:5240/MAAS
+run_cmd sudo maas init region+rack --database-uri "postgres://$MAAS_DBUSER:$MAAS_DBPASS@$HOSTNAME/$MAAS_DBNAME" --maas-url "$MAAS_URL"
 
-sudo maas createadmin --username=$MAAS_USERNAME --password=$MAAS_PASSWORD --email=$MAAS_EMAIL
-
+run_cmd sudo maas createadmin --username="$MAAS_USERNAME" --password="$MAAS_PASSWORD" --email="$MAAS_EMAIL"
